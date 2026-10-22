@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Stack Up — Telegram Mini App game</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;background:var(--tg-theme-bg-color,#101426)}
+  canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+// Telegram Mini App integration; everything degrades gracefully in a normal browser.
+// The SDK also loads in a plain browser (empty initData), so only treat a non-empty initData as "inside Telegram".
+const TG = window.Telegram && Telegram.WebApp && Telegram.WebApp.initData ? Telegram.WebApp : null;
+const hasCloud = !!(TG && TG.isVersionAtLeast && TG.isVersionAtLeast("6.9") && TG.CloudStorage);
+if (TG) { TG.ready(); TG.expand(); try { TG.disableVerticalSwipes && TG.disableVerticalSwipes(); } catch (e) {} }
+const haptic = t => { try { TG && TG.HapticFeedback && (t === "error" ? TG.HapticFeedback.notificationOccurred("error") : TG.HapticFeedback.impactOccurred(t)); } catch (e) {} };
+const player = (TG && TG.initDataUnsafe && TG.initDataUnsafe.user && TG.initDataUnsafe.user.first_name) || "Player";
+
+// Personal best: Telegram CloudStorage when inside Telegram, localStorage otherwise.
+const store = {
+  get(cb) {
+    if (hasCloud) { TG.CloudStorage.getItem("best", (e, v) => cb(+v || 0)); return; }
+    try { cb(+localStorage.getItem("stack-best") || 0); } catch (e) { cb(0); }
+  },
+  set(v) {
+    if (hasCloud) { TG.CloudStorage.setItem("best", String(v)); return; }
+    try { localStorage.setItem("stack-best", String(v)); } catch (e) {}
+  }
+};
+
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 360, H = 640, BH = 26;            // logical size, block height
+let scale = 1, ox = 0, oy = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(devicePixelRatio || 1, 2);
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  ox = (innerWidth - W * scale) / 2; oy = (innerHeight - H * scale) / 2;
+}
+addEventListener("resize", resize); resize();
+
+let tower = null, moving = null, cam = 0, score = 0, best = 0, state = "menu", chips = [], combo = 0, perfectFlash = 0;
+store.get(v => best = v);
+function hue(i) { return `hsl(${(200 + i * 9) % 360} 80% 60%)`; }
+function reset() {
+  tower = [{ x: 90, w: 180, y: 0 }];
+  score = 0; combo = 0; cam = 0; chips = []; perfectFlash = 0;
+  spawn();
+}
+function spawn() {
+  const top = tower[tower.length - 1], speed = Math.min(150 + score * 9, 420);
+  moving = { x: score % 2 ? -top.w * 0.8 : W - top.w * 0.2, w: top.w, y: top.y + 1, dir: score % 2 ? 1 : -1, speed };
+}
+function drop() {
+  const top = tower[tower.length - 1];
+  const l = Math.max(moving.x, top.x), r = Math.min(moving.x + moving.w, top.x + top.w);
+  if (r - l <= 0) { gameOver(); return; }
+  if (Math.abs(moving.x - top.x) < 5) {                        // perfect: snap, grow back a little on combos
+    combo++; perfectFlash = 1; haptic("heavy");
+    const grow = combo >= 3 ? Math.min(12, 180 - top.w) : 0;
+    tower.push({ x: top.x - grow / 2, w: top.w + grow, y: moving.y });
+  } else {
+    combo = 0; haptic("light");
+    const cut = moving.w - (r - l), cx = moving.x < top.x ? moving.x : r;
+    chips.push({ x: cx, w: cut, y: moving.y, vy: 0, i: tower.length });
+    tower.push({ x: l, w: r - l, y: moving.y });
+  }
+  score++; spawn();
+}
+function gameOver() {
+  state = "over"; haptic("error");
+  chips.push({ x: moving.x, w: moving.w, y: moving.y, vy: 0, i: tower.length });
+  if (score > best) { best = score; store.set(best); }
+  if (TG && TG.MainButton) { TG.MainButton.setText("PLAY AGAIN"); TG.MainButton.show(); TG.MainButton.onClick(restart); }
+}
+function restart() { if (TG && TG.MainButton) { TG.MainButton.hide(); TG.MainButton.offClick(restart); } reset(); state = "play"; }
+function share() {
+  const text = `I stacked ${score} blocks in Stack Up! Can you beat me?`;
+  const url = "https://condrusarsen.github.io/playable-ads-demo/tg-stack/";
+  const link = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`;
+  if (TG && TG.openTelegramLink) TG.openTelegramLink(link); else window.open(link, "_blank");
+}
+
+cv.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const y = (e.clientY - oy) / scale, x = (e.clientX - ox) / scale;
+  if (state === "menu") { reset(); state = "play"; return; }
+  if (state === "play") { drop(); return; }
+  if (state === "over") {
+    if (y > 430 && y < 480 && x > 190) { share(); return; }
+    if (y > 430 && y < 480) { restart(); return; }
+  }
+});
+
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function text(s, x, y, size, col = "#fff") {
+  ctx.font = `800 ${size}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = col; ctx.fillText(s, x, y);
+}
+// world y (blocks) -> screen y; the camera keeps the top of the tower around y=300
+const sy = i => 560 - i * BH + cam;
+function block(b, i, a = 1) {
+  ctx.globalAlpha = a; ctx.fillStyle = hue(i); rr(b.x, sy(b.y) - BH, b.w, BH - 2, 6); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.25)"; ctx.fillRect(b.x + 4, sy(b.y) - BH + 3, b.w - 8, 4); ctx.globalAlpha = 1;
+}
+let last = 0;
+function frame(now) {
+  const dt = Math.min(0.033, (now - last) / 1000 || 0.016); last = now;
+  if (state === "play") {
+    moving.x += moving.dir * moving.speed * dt;
+    if (moving.dir > 0 && moving.x > W - moving.w * 0.2) moving.dir = -1;
+    if (moving.dir < 0 && moving.x < -moving.w * 0.8) moving.dir = 1;
+  }
+  if (tower) cam += (Math.max(0, (tower.length - 9) * BH) - cam) * Math.min(1, dt * 6);
+  for (const c of chips) { c.vy += 900 * dt; c.y -= c.vy * dt / BH; }
+  if (chips) chips = chips.filter(c => sy(c.y) < H + 200);
+  perfectFlash = Math.max(0, (perfectFlash || 0) - dt * 2);
+
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+  const k = tower ? Math.min(1, tower.length / 40) : 0;
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, `hsl(${230 - k * 60} 45% ${14 + k * 10}%)`); g.addColorStop(1, "#0b0e1c");
+  ctx.fillStyle = g; ctx.fillRect(-ox / scale, -oy / scale, innerWidth / scale, innerHeight / scale);
+
+  if (tower) {
+    tower.forEach((b, i) => { if (sy(b.y) > -BH && sy(b.y) < H + BH) block(b, i); });
+    for (const c of chips) block(c, c.i, 0.8);
+    if (state === "play") block(moving, tower.length);
+  }
+  if (perfectFlash > 0) text(combo >= 3 ? `PERFECT ×${combo}` : "PERFECT", 180, 200, 26, `rgba(255,230,120,${perfectFlash})`);
+
+  if (state === "menu") {
+    text("STACK UP", 180, 220, 48); text(`Hi, ${player}!`, 180, 270, 20, "#b9c3ff");
+    text("Tap to drop the block", 180, 330, 18, "#dfe4ff"); text("Perfect drops grow it back", 180, 356, 16, "#9aa6e0");
+    if (best) text(`Your best: ${best}`, 180, 410, 18, "#ffd23f");
+    text("TAP TO START", 180, 500, 22, `rgba(255,255,255,${0.6 + Math.sin(now / 250) * 0.4})`);
+  } else {
+    text(String(score), 180, 90, 56);
+    if (state === "over") {
+      ctx.fillStyle = "rgba(8,10,22,.82)"; rr(30, 230, 300, 270, 22); ctx.fill();
+      text("GAME OVER", 180, 275, 32); text(`Score ${score}  ·  Best ${best}`, 180, 320, 20, "#ffd23f");
+      ctx.fillStyle = "#3a7bfd"; rr(50, 430, 125, 50, 25); ctx.fill(); text("AGAIN", 112, 456, 18);
+      ctx.fillStyle = "#37c46a"; rr(190, 430, 125, 50, 25); ctx.fill(); text("SHARE", 252, 456, 18);
+      text("Challenge friends in Telegram", 180, 380, 15, "#b9c3ff");
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
