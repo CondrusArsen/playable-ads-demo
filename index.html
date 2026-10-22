@@ -66,7 +66,7 @@
       <h2>Stack Up — Telegram Mini App game</h2>
       <ul>
         <li>One-tap stacker with perfect-drop combos that grow the block back</li>
-        <li>Telegram WebApp SDK: haptics, MainButton, player name, best score in CloudStorage</li>
+        <li>Telegram WebApp SDK hooks (haptics, MainButton, player name, CloudStorage best score) — integration demo, not yet tested inside a live bot</li>
         <li>“Share” challenges friends through Telegram; works as a normal web page too</li>
       </ul>
       <a class="btn" href="tg-stack/" target="_blank" rel="noopener">Open full screen</a>
@@ -76,8 +76,8 @@
   <section class="specs card">
     <h2>Technical</h2>
     <ul>
-      <li>Single HTML file each, no external assets or requests: 12–17 KB for the vanilla canvas ads, ~0.8 MB with PixiJS inlined (all under the 5 MB limit of every major network)</li>
-      <li>MRAID 2.0: waits for <code>ready</code> and <code>viewable</code>, CTA via <code>mraid.open()</code>; Google Ads via <code>ExitApi.exit()</code>; plain web fallback</li>
+      <li>Single HTML file each, no external assets or requests: 12–17 KB for the vanilla canvas ads, ~0.8 MB with PixiJS inlined (sizes well below the common 5 MB playable limit)</li>
+      <li>MRAID 2.0 integration scaffold: waits for <code>ready</code> and <code>viewable</code>, CTA via <code>mraid.open()</code>; Google Ads via <code>ExitApi.exit()</code>; plain web fallback</li>
       <li>Portrait and landscape, letterboxed 9:16 logical canvas, retina-aware</li>
       <li><code>build.mjs</code> produces starting variants for AppLovin, Unity Ads, ironSource, Mintegral and Google Ads; each network's own validator is still the final check before launch</li>
     </ul>
