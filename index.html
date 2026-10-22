@@ -28,7 +28,7 @@
 <body>
 <main>
   <h1>Playable ads — demos</h1>
-  <p class="lead">Two interactive HTML5 ads in the formats that dominate mobile UA today: a physics pin-puzzle and a crowd runner with math gates. Each one is a single HTML file with no external requests, ready for MRAID networks. Tap a phone to play.</p>
+  <p class="lead">Three interactive HTML5 ads in formats that dominate mobile UA today: a physics pin-puzzle, a crowd runner with math gates and a merge battler on PixiJS. Each one is a single HTML file with no external requests, ready for MRAID networks. Tap a phone to play.</p>
 
   <div class="grid">
     <section class="card">
@@ -51,12 +51,22 @@
       </ul>
       <a class="btn" href="crowd-gates/" target="_blank" rel="noopener">Open full screen</a>
     </section>
+    <section class="card">
+      <div class="phone"><iframe src="merge-army/" title="Merge Army playable" loading="lazy"></iframe></div>
+      <h2>Merge Army — PixiJS</h2>
+      <ul>
+        <li>Drag same-level soldiers together to merge, buy units, then FIGHT</li>
+        <li>Built on PixiJS 8 (WebGL), library inlined — still one file, ~0.8 MB</li>
+        <li>Live power vs enemy readout, tutorial hand that switches to the FIGHT button</li>
+      </ul>
+      <a class="btn" href="merge-army/" target="_blank" rel="noopener">Open full screen</a>
+    </section>
   </div>
 
   <section class="specs card">
     <h2>Technical</h2>
     <ul>
-      <li>Single HTML file each, ~15–20 KB, no external assets or requests (fits the 5 MB limit of every major network)</li>
+      <li>Single HTML file each, no external assets or requests: 12–17 KB for the vanilla canvas ads, ~0.8 MB with PixiJS inlined (all under the 5 MB limit of every major network)</li>
       <li>MRAID 2.0: waits for <code>ready</code> and <code>viewable</code>, CTA via <code>mraid.open()</code>; Google Ads via <code>ExitApi.exit()</code>; plain web fallback</li>
       <li>Portrait and landscape, letterboxed 9:16 logical canvas, retina-aware</li>
       <li><code>build.mjs</code> produces network variants: AppLovin, Unity Ads, ironSource, Mintegral, Google Ads</li>

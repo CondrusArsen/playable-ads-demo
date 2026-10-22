@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="ad.orientation" content="portrait,landscape">
+<title>Merge Army — playable ad (PixiJS)</title>
+<!--MRAID-->
+<style>
+  html,body{margin:0;height:100%;background:#1b1530;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<script src="../vendor/pixi-8.20.1.min.js"></script><!--PIXI-->
+<script>
+"use strict";
+// ---------- ad network glue (MRAID 2.0 / Google ExitApi / plain web) ----------
+const STORE = {
+  android: "https://play.google.com/store/apps/details?id=com.example.mergearmy",
+  ios: "https://apps.apple.com/app/id0000000000"
+};
+function openStore() {
+  const url = /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent) ? STORE.ios : STORE.android;
+  try { if (window.mraid && mraid.open) { mraid.open(url); return; } } catch (e) {}
+  if (window.ExitApi && ExitApi.exit) { ExitApi.exit(); return; }
+  window.open(url, "_blank");
+}
+function whenReady(start) {
+  const m = window.mraid;
+  if (!m) { start(); return; }
+  const go = () => { if (m.isViewable()) start(); else m.addEventListener("viewableChange", v => v && start()); };
+  if (m.getState() === "loading") m.addEventListener("ready", go); else go();
+}
+
+const { Application, Container, Graphics, Text } = PIXI;
+const W = 360, H = 640;
+const COLS = 3, ROWS = 3, CELL = 80, GRID_X = 180 - (COLS * CELL) / 2, GRID_Y = 352;
+const LV_COLOR = [0, 0x4cd964, 0x3fa9ff, 0xa66bff, 0xff9f1c, 0xff3b6b];
+const power = lv => lv * lv * 10;       // merging always beats keeping two units apart
+const ENEMY = [3, 1, 1, 1];              // enemy levels: power 90 + 30 = 120
+const UNIT_COST = 10;
+
+let app, root, board, army, enemyLayer, ui, fxLayer, hand;
+let cells = [], coins = 30, phase = "build", phaseT = 0, merges = 0, firstTouch = false, result = "";
+let coinText, buyBtn, fightBtn, powerText, enemyText;
+
+function label(text, size, color = 0xffffff) {
+  const t = new Text({ text, style: { fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,sans-serif", fontWeight: "900", fontSize: size, fill: color, stroke: { color: 0x1b1530, width: size / 5 } } });
+  t.anchor.set(0.5); return t;
+}
+function button(text, w, h, color) {
+  const c = new Container();
+  c.addChild(new Graphics().roundRect(-w / 2, -h / 2, w, h, h / 2).fill(color));
+  c.addChild(label(text, h * 0.42));
+  c.eventMode = "static"; c.cursor = "pointer";
+  return c;
+}
+function soldier(lv, enemy = false) {
+  const c = new Container(), s = 0.75 + lv * 0.17, col = enemy ? 0xe8434b : LV_COLOR[lv];
+  const g = new Graphics()
+    .ellipse(0, 26 * s, 22 * s, 6 * s).fill({ color: 0x000000, alpha: 0.25 })
+    .roundRect(-15 * s, -6 * s, 30 * s, 32 * s, 10 * s).fill(col)
+    .circle(0, -16 * s, 13 * s).fill(0xffe0bd)
+    .rect(-14 * s, -26 * s, 28 * s, 8 * s).fill(col)
+    .circle(-5 * s, -15 * s, 2 * s).fill(0x1a1a1a).circle(5 * s, -15 * s, 2 * s).fill(0x1a1a1a);
+  if (lv >= 3) g.poly([-10 * s, -26 * s, -6 * s, -36 * s, 0, -28 * s, 6 * s, -36 * s, 10 * s, -26 * s]).fill(0xffd23f);
+  c.addChild(g);
+  const badge = new Container();
+  badge.addChild(new Graphics().circle(0, 0, 11).fill(0x1b1530).circle(0, 0, 9).fill(enemy ? 0xffffff : 0xffd23f));
+  badge.addChild(label(String(lv), 13, 0x1b1530)); badge.children[1].style.stroke = { width: 0 };
+  badge.position.set(16 * s, -30 * s); c.addChild(badge);
+  c.lv = lv; c.hp = power(lv); return c;
+}
+
+function cellPos(i) { return { x: GRID_X + (i % COLS) * CELL + CELL / 2, y: GRID_Y + Math.floor(i / COLS) * CELL + CELL / 2 }; }
+function place(unit, i) { cells[i] = unit; unit.cell = i; const p = cellPos(i); unit.home = p; unit.position.set(p.x, p.y); }
+function addUnit(lv, i) {
+  const u = soldier(lv); place(u, i); army.addChild(u);
+  u.eventMode = "static"; u.cursor = "grab"; u.on("pointerdown", e => startDrag(u, e));
+  pop(u); return u;
+}
+function pop(o) { o.scale.set(0.2); o.popT = 0; }
+function totalPower() { return cells.reduce((a, u) => a + (u ? power(u.lv) : 0), 0); }
+function enemyPower() { return ENEMY.reduce((a, lv) => a + power(lv), 0); }
+
+// ---------- drag & merge ----------
+let drag = null;
+function startDrag(u, e) {
+  if (phase !== "build") return;
+  firstTouch = true; drag = u; army.addChild(u);
+  u.scale.set(1.15); moveDrag(e);
+}
+function moveDrag(e) { if (!drag) return; const p = root.toLocal(e.global); drag.position.set(p.x, p.y - 20); }
+function endDrag() {
+  if (!drag) return;
+  const u = drag; drag = null; u.scale.set(1);
+  let target = -1, best = CELL * 0.6;
+  for (let i = 0; i < cells.length; i++) { const p = cellPos(i), d = Math.hypot(p.x - u.x, p.y - u.y); if (d < best) { best = d; target = i; } }
+  if (target < 0 || target === u.cell) { place(u, u.cell); return; }
+  const other = cells[target];
+  if (!other) { cells[u.cell] = null; place(u, target); return; }
+  if (other.lv === u.lv && u.lv < 5) {
+    cells[u.cell] = null; cells[target] = null;
+    army.removeChild(u); army.removeChild(other);
+    const m = addUnit(u.lv + 1, target); merges++;
+    burst(m.x, m.y, LV_COLOR[m.lv], 18); beep(400 + m.lv * 120, 0.12);
+  } else { place(other, u.cell); place(u, target); } // swap
+  refresh();
+}
+
+// ---------- effects ----------
+const parts = [];
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const g = new Graphics().circle(0, 0, 3 + Math.random() * 3).fill(color);
+    g.position.set(x, y); g.vx = (Math.random() - 0.5) * 360; g.vy = -Math.random() * 320; g.life = 0.7;
+    fxLayer.addChild(g); parts.push(g);
+  }
+}
+let ac = null;
+function beep(f, d = 0.06, type = "triangle", v = 0.05) {
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = f; g.gain.value = v;
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d);
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
+  } catch (e) {}
+}
+
+// ---------- UI ----------
+function refresh() {
+  coinText.text = String(coins);
+  buyBtn.alpha = coins >= UNIT_COST && cells.includes(null) ? 1 : 0.45;
+  powerText.text = "POWER " + totalPower();
+  powerText.style.fill = totalPower() > enemyPower() ? 0x5cf28a : 0xffffff;
+}
+function buy() {
+  if (phase !== "build" || coins < UNIT_COST) return;
+  const i = cells.indexOf(null); if (i < 0) return;
+  coins -= UNIT_COST; firstTouch = true; addUnit(1, i); beep(660); refresh();
+}
+function fight() {
+  if (phase !== "build") return;
+  phase = "march"; phaseT = 0; hand.visible = false; buyBtn.visible = fightBtn.visible = false;
+  beep(220, 0.25, "sawtooth", 0.04);
+}
+
+// ---------- battle (visual; the outcome is decided by total power) ----------
+function battle(dt) {
+  const mine = army.children, foes = enemyLayer.children;
+  if (phase === "march") {
+    for (const u of mine) u.y += (250 - u.y) * Math.min(1, dt * 2.5);
+    for (const e of foes) e.y += (205 - e.y) * Math.min(1, dt * 2.5);
+    if (phaseT > 1) { phase = "clash"; phaseT = 0; }
+  } else if (phase === "clash") {
+    const win = totalPower() > enemyPower();
+    for (const o of [...mine, ...foes]) o.x += Math.sin(phaseT * 40 + o.y) * 1.2;
+    if (Math.random() < dt * 14) { const o = [...mine, ...foes][Math.floor(Math.random() * (mine.length + foes.length))]; if (o) burst(o.x, o.y - 10, 0xffffff, 4); beep(300 + Math.random() * 300, 0.03, "square", 0.02); }
+    // the weaker side loses its smallest units first
+    if (phaseT > 0.35) {
+      phaseT = 0;
+      const losers = win ? foes : mine, winners = win ? mine : foes;
+      const victim = losers.slice().sort((a, b) => a.lv - b.lv)[0];
+      if (victim) { burst(victim.x, victim.y, 0xe8434b, 10); victim.parent.removeChild(victim); }
+      else {
+        if (winners.length > 1 && Math.random() < 0.5) { const w = winners.slice().sort((a, b) => a.lv - b.lv)[0]; w.parent.removeChild(w); }
+        result = win ? "win" : "lose"; phase = "result"; phaseT = 0; beep(win ? 880 : 150, 0.35);
+        resultText.text = win ? "VICTORY!" : "DEFEAT!"; resultText.style.fill = win ? 0xffd23f : 0xff6b6b; resultText.visible = true;
+      }
+    }
+  } else if (phase === "result" && phaseT > 1.6) { showEnd(); }
+}
+
+// ---------- end card ----------
+let endCard, resultText;
+function showEnd() {
+  phase = "end"; phaseT = 0; endCard.visible = true; endCard.alpha = 0;
+  endCard.getChildByLabel("sub").text = result === "win" ? "Merge and win 500+ battles" : "Merge smarter, win bigger!";
+}
+function buildEnd() {
+  endCard = new Container(); endCard.visible = false;
+  endCard.addChild(new Graphics().rect(-400, -400, W + 800, H + 800).fill({ color: 0x120c1f, alpha: 0.93 }));
+  const icon = new Container(); icon.position.set(180, 200);
+  icon.addChild(new Graphics().roundRect(-70, -70, 140, 140, 32).fill(0x7b5cff));
+  const s = soldier(4); s.scale.set(1.6); s.y = 15; icon.addChild(s); endCard.addChild(icon); endCard.icon = icon;
+  const t = label("MERGE ARMY", 34); t.position.set(180, 315); endCard.addChild(t);
+  const sub = label("", 17, 0xd8ccff); sub.label = "sub"; sub.position.set(180, 352); endCard.addChild(sub);
+  const st = label("★★★★★", 20, 0xffd23f); st.position.set(180, 382); endCard.addChild(st);
+  const play = button("PLAY NOW", 220, 64, 0x37c46a); play.position.set(180, 460); endCard.addChild(play); endCard.play = play;
+  endCard.eventMode = "static"; endCard.on("pointerdown", openStore);
+  root.addChild(endCard);
+}
+
+// ---------- setup ----------
+function layout() {
+  const sw = app.screen.width, sh = app.screen.height, k = Math.min(sw / W, sh / H);
+  root.scale.set(k); root.position.set((sw - W * k) / 2, (sh - H * k) / 2);
+  bg.clear().rect(-root.x / k, -root.y / k, sw / k, sh / k).fill(0x1b1530)
+    .rect(-root.x / k, 300, sw / k, 2000).fill(0x24402e);
+}
+let bg;
+async function start() {
+  app = new Application();
+  await app.init({ resizeTo: window, background: 0x1b1530, antialias: true, resolution: Math.min(devicePixelRatio || 1, 2), autoDensity: true, preference: "webgl" });
+  document.body.appendChild(app.canvas);
+  root = new Container(); app.stage.addChild(root);
+  bg = new Graphics(); root.addChild(bg);
+  // arena
+  root.addChild(new Graphics().roundRect(20, 130, 320, 170, 24).fill({ color: 0x3a2b5c, alpha: 0.6 }));
+  board = new Graphics();
+  for (let i = 0; i < COLS * ROWS; i++) { const p = cellPos(i); board.roundRect(p.x - CELL / 2 + 4, p.y - CELL / 2 + 4, CELL - 8, CELL - 8, 16).fill({ color: 0xffffff, alpha: 0.12 }); }
+  root.addChild(board);
+  enemyLayer = new Container(); root.addChild(enemyLayer);
+  ENEMY.forEach((lv, i) => { const e = soldier(lv, true); e.position.set(i === 0 ? 180 : 95 + (i - 1) * 85, i === 0 ? 195 : 245); e.scale.x = -1; enemyLayer.addChild(e); });
+  army = new Container(); root.addChild(army);
+  fxLayer = new Container(); root.addChild(fxLayer);
+  ui = new Container(); root.addChild(ui);
+
+  cells = new Array(COLS * ROWS).fill(null);
+  [0, 2, 4, 6, 8].forEach(i => addUnit(1, i));
+
+  const coinBox = new Graphics().roundRect(12, 14, 110, 34, 17).fill({ color: 0x000000, alpha: 0.35 }).circle(30, 31, 10).fill(0xffd23f);
+  ui.addChild(coinBox); coinText = label("", 20); coinText.position.set(74, 32); ui.addChild(coinText);
+  const install = button("INSTALL", 98, 34, 0x37c46a); install.position.set(299, 31); install.on("pointerdown", openStore); ui.addChild(install);
+  enemyText = label("ENEMY " + enemyPower(), 18, 0xff8a8a); enemyText.position.set(180, 112); ui.addChild(enemyText);
+  powerText = label("", 20); powerText.position.set(180, 335); ui.addChild(powerText);
+  buyBtn = button("+ UNIT  " + UNIT_COST, 140, 56, 0x3fa9ff); buyBtn.position.set(100, 612); buyBtn.on("pointerdown", buy); ui.addChild(buyBtn);
+  fightBtn = button("FIGHT!", 140, 56, 0xff5a1f); fightBtn.position.set(260, 612); fightBtn.on("pointerdown", fight); ui.addChild(fightBtn);
+  const title = label("MERGE TO GET STRONGER!", 22, 0xffd23f); title.position.set(180, 78); ui.addChild(title); ui.title = title;
+  resultText = label("", 48); resultText.position.set(180, 150); resultText.visible = false; ui.addChild(resultText);
+  hand = label("👆", 44); hand.style.stroke = { width: 0 }; ui.addChild(hand);
+  buildEnd(); refresh();
+
+  app.stage.eventMode = "static"; app.stage.hitArea = app.screen;
+  app.stage.on("pointermove", moveDrag); app.stage.on("pointerup", endDrag); app.stage.on("pointerupoutside", endDrag);
+  addEventListener("resize", () => setTimeout(layout, 0)); layout();
+
+  let time = 0;
+  app.ticker.add(tk => {
+    const dt = Math.min(0.05, tk.deltaMS / 1000); time += dt; phaseT += dt;
+    for (const u of army.children) if (u.popT !== undefined && u.popT < 1) { u.popT = Math.min(1, u.popT + dt * 5); const k = 1 + Math.sin(u.popT * Math.PI) * 0.25; u.scale.set(u === drag ? 1.15 : Math.max(0.2, u.popT) * k); }
+    for (let i = parts.length - 1; i >= 0; i--) { const g = parts[i]; g.life -= dt; g.vy += 800 * dt; g.x += g.vx * dt; g.y += g.vy * dt; g.alpha = Math.max(0, g.life / 0.7); if (g.life <= 0) { g.destroy(); parts.splice(i, 1); } }
+    // tutorial hand: drag a level-1 onto another level-1, then point at FIGHT
+    if (phase === "build") {
+      const k = (time * 0.8) % 1;
+      if (merges < 2) {
+        const ones = cells.map((u, i) => u && u.lv === 1 ? i : -1).filter(i => i >= 0);
+        if (ones.length >= 2) { const a = cellPos(ones[0]), b = cellPos(ones[1]); hand.visible = !drag; hand.position.set(a.x + (b.x - a.x) * k + 10, a.y + (b.y - a.y) * k + 30); }
+        else hand.visible = false;
+      } else { hand.visible = !drag; hand.position.set(270, 642 + Math.sin(time * 6) * 6); }
+      ui.title.scale.set(1 + Math.sin(time * 4) * 0.04);
+      if (!firstTouch && time > 9) fight();      // never stall on a passive viewer
+      if (time > 40) fight();
+    }
+    if (phase !== "build" && phase !== "end") battle(dt);
+    if (phase === "end") { endCard.alpha = Math.min(1, endCard.alpha + dt * 2); endCard.play.scale.set(1 + Math.sin(time * 6) * 0.05); endCard.icon.rotation = Math.sin(time * 2) * 0.04; }
+  });
+}
+whenReady(start);
+</script>
+</body>
+</html>

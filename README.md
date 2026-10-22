@@ -6,9 +6,10 @@ Two HTML5 playable ads in the most common mobile UA formats. **Live:** https://c
 |---|---|---|
 | [Tower Rescue](pin-rescue/index.html) | Pin-pull puzzle with particle fluids (gold, water, lava → stone) | tutorial → 3-pin puzzle → fail/retry → end card |
 | [Crowd Gates](crowd-gates/index.html) | Crowd runner with +, −, × gates and a boss army | auto-play until first touch → gates → battle → end card |
+| [Merge Army](merge-army/index.html) | Merge battler on **PixiJS 8** (source: `merge-army/src.html`) | drag-to-merge tutorial → buy units → fight → end card |
 
 ## Tech
-- Single self-contained HTML per ad, about 15–20 KB, zero external requests.
+- Single self-contained HTML per ad, zero external requests: 12–17 KB (vanilla canvas) or ~0.8 MB (PixiJS inlined by `build.mjs`).
 - MRAID 2.0 lifecycle (`ready` → `viewable`), CTA through `mraid.open()`, Google `ExitApi.exit()`, plain-web fallback.
 - Logical 360×640 canvas, letterboxed for any aspect ratio, portrait and landscape, devicePixelRatio-aware.
 - Tiny WebAudio sound, started only after a user gesture.
