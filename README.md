@@ -24,4 +24,4 @@ Writes `dist/<network>/<ad>.html` starting variants for AppLovin, Unity Ads, iro
 
 Game names and store links are fictional; all code and art are original (drawn in code, no third-party assets).
 
-Made by Arseni Atrokhov with AI coding agents (Claude Code). Design, mechanics tuning and testing are mine.
+Built with AI coding agents (Claude Code) as part of Arseni Atrokhov's AI-assisted game development workflow.
