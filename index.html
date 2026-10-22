@@ -28,7 +28,7 @@
 <body>
 <main>
   <h1>Playable ads — demos</h1>
-  <p class="lead">Three interactive HTML5 ads in formats that dominate mobile UA today: a physics pin-puzzle, a crowd runner with math gates and a merge battler on PixiJS. Each one is a single HTML file with no external requests, ready for MRAID networks. Tap a phone to play.</p>
+  <p class="lead">Three interactive HTML5 ads in formats that dominate mobile UA today: a physics pin-puzzle, a crowd runner with math gates and a merge battler on PixiJS. Each one is a single HTML file with no external requests, structured for MRAID 2.0. Tap a phone to play.</p>
 
   <div class="grid">
     <section class="card">
@@ -79,7 +79,7 @@
       <li>Single HTML file each, no external assets or requests: 12–17 KB for the vanilla canvas ads, ~0.8 MB with PixiJS inlined (all under the 5 MB limit of every major network)</li>
       <li>MRAID 2.0: waits for <code>ready</code> and <code>viewable</code>, CTA via <code>mraid.open()</code>; Google Ads via <code>ExitApi.exit()</code>; plain web fallback</li>
       <li>Portrait and landscape, letterboxed 9:16 logical canvas, retina-aware</li>
-      <li><code>build.mjs</code> produces network variants: AppLovin, Unity Ads, ironSource, Mintegral, Google Ads</li>
+      <li><code>build.mjs</code> produces starting variants for AppLovin, Unity Ads, ironSource, Mintegral and Google Ads; each network's own validator is still the final check before launch</li>
     </ul>
   </section>
 

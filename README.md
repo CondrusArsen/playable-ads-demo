@@ -20,7 +20,7 @@ Bonus: [Stack Up](tg-stack/index.html) — a Telegram Mini App game (Telegram We
 ```bash
 node build.mjs
 ```
-Writes `dist/<network>/<ad>.html` for AppLovin, Unity Ads, ironSource, Mintegral, Google Ads and plain web.
+Writes `dist/<network>/<ad>.html` starting variants for AppLovin, Unity Ads, ironSource, Mintegral, Google Ads and plain web. Run each through the network's own playable tester before launch; these demos have not been through live network review.
 
 Game names and store links are fictional; all code and art are original (drawn in code, no third-party assets).
 
