@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Playable Ads — Arseni Atrokhov</title>
+<meta name="description" content="HTML5 playable ad demos (MRAID 2.0, single-file, under 5 MB) by Arseni Atrokhov.">
+<style>
+  :root{--bg:#0f1220;--card:#1a1f35;--ink:#eef1ff;--mute:#a9b0d6;--acc:#3ec46d}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  main{max-width:1040px;margin:0 auto;padding:32px 16px 48px}
+  h1{font-size:clamp(26px,5vw,40px);margin:0 0 8px}
+  p.lead{color:var(--mute);margin:0 0 28px;max-width:720px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px}
+  .card{background:var(--card);border-radius:20px;padding:20px}
+  .phone{width:100%;max-width:300px;aspect-ratio:9/16;margin:0 auto 16px;border:10px solid #000;border-radius:32px;overflow:hidden;background:#000}
+  .phone iframe{width:100%;height:100%;border:0;display:block}
+  h2{margin:0 0 6px;font-size:20px}
+  ul{margin:8px 0 0;padding-left:18px;color:var(--mute)}
+  a{color:#7fb4ff}
+  .btn{display:inline-block;margin-top:12px;padding:8px 14px;border-radius:999px;background:var(--acc);color:#fff;text-decoration:none;font-weight:700}
+  .specs{margin-top:32px}
+  .specs li{margin:4px 0}
+  footer{margin-top:32px;color:var(--mute);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Playable ads — demos</h1>
+  <p class="lead">Two interactive HTML5 ads in the formats that dominate mobile UA today: a physics pin-puzzle and a crowd runner with math gates. Each one is a single HTML file with no external requests, ready for MRAID networks. Tap a phone to play.</p>
+
+  <div class="grid">
+    <section class="card">
+      <div class="phone"><iframe src="pin-rescue/" title="Tower Rescue playable" loading="lazy"></iframe></div>
+      <h2>Tower Rescue — pin puzzle</h2>
+      <ul>
+        <li>Tutorial level, then a 3-pin puzzle: water cools lava into stone, gold melts in lava</li>
+        <li>Particle fluid physics on canvas, fail state with retry, end card</li>
+        <li>Adaptive hand hint shows only when the player hesitates</li>
+      </ul>
+      <a class="btn" href="pin-rescue/" target="_blank" rel="noopener">Open full screen</a>
+    </section>
+    <section class="card">
+      <div class="phone"><iframe src="crowd-gates/" title="Crowd Gates playable" loading="lazy"></iframe></div>
+      <h2>Crowd Gates — runner</h2>
+      <ul>
+        <li>Drag to steer through +, −, × gates, then the crowd fights the boss army</li>
+        <li>Auto-play until the first touch, so the ad never stalls on a passive viewer</li>
+        <li>Win and lose both lead to the end card with a CTA</li>
+      </ul>
+      <a class="btn" href="crowd-gates/" target="_blank" rel="noopener">Open full screen</a>
+    </section>
+  </div>
+
+  <section class="specs card">
+    <h2>Technical</h2>
+    <ul>
+      <li>Single HTML file each, ~15–20 KB, no external assets or requests (fits the 5 MB limit of every major network)</li>
+      <li>MRAID 2.0: waits for <code>ready</code> and <code>viewable</code>, CTA via <code>mraid.open()</code>; Google Ads via <code>ExitApi.exit()</code>; plain web fallback</li>
+      <li>Portrait and landscape, letterboxed 9:16 logical canvas, retina-aware</li>
+      <li><code>build.mjs</code> produces network variants: AppLovin, Unity Ads, ironSource, Mintegral, Google Ads</li>
+    </ul>
+  </section>
+
+  <footer>
+    Arseni Atrokhov — game designer &amp; HTML5 / Roblox developer working with AI coding agents.
+    <a href="https://condrusarsen.github.io/ai-game-lab/">Portfolio</a> ·
+    <a href="https://github.com/CondrusArsen">GitHub</a> ·
+    <a href="https://www.linkedin.com/in/arseni-atrokhov/">LinkedIn</a> ·
+    <a href="https://t.me/qintin">Telegram</a>.
+    Games and store links in these demos are fictional.
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="ad.orientation" content="portrait,landscape">
+<title>Crowd Gates — playable ad</title>
+<!--MRAID-->
+<style>
+  html,body{margin:0;height:100%;background:#0e2233;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+// ---------- ad network glue (MRAID 2.0 / Google ExitApi / plain web) ----------
+const STORE = {
+  android: "https://play.google.com/store/apps/details?id=com.example.crowdgates",
+  ios: "https://apps.apple.com/app/id0000000000"
+};
+function openStore() {
+  const url = /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent) ? STORE.ios : STORE.android;
+  try { if (window.mraid && mraid.open) { mraid.open(url); return; } } catch (e) {}
+  if (window.ExitApi && ExitApi.exit) { ExitApi.exit(); return; }
+  window.open(url, "_blank");
+}
+function whenReady(start) {
+  const m = window.mraid;
+  if (!m) { start(); return; }
+  const go = () => { if (m.isViewable()) start(); else m.addEventListener("viewableChange", v => v && start()); };
+  if (m.getState() === "loading") m.addEventListener("ready", go); else go();
+}
+
+// ---------- canvas & scaling (logical 360x640) ----------
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 360, H = 640;
+let scale = 1, ox = 0, oy = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  ox = (innerWidth - W * scale) / 2; oy = (innerHeight - H * scale) / 2;
+}
+addEventListener("resize", resize); resize();
+
+let ac = null;
+function beep(f, d = 0.06, type = "triangle", v = 0.05) {
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = f; g.gain.value = v;
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d);
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
+  } catch (e) {}
+}
+
+// ---------- fake-3D road: world z (distance ahead) -> screen ----------
+const HORIZON = 150, CAM = 120, ROAD = 150; // road half-width in world units
+function proj(x, z) {               // x in [-ROAD, ROAD], z >= 0 ahead of the player line
+  const k = CAM / (CAM + z);
+  return { x: 180 + x * k * 1.1, y: HORIZON + (560 - HORIZON) * k, k };
+}
+
+// ---------- level ----------
+// Each gate row: two options; the player's lane (left/right) picks one.
+const ROWS = [
+  { z: 500,  l: ["+", 10], r: ["x", 2] },
+  { z: 1000, l: ["-", 5],  r: ["+", 15] },
+  { z: 1500, l: ["x", 3],  r: ["+", 20] },
+  { z: 2000, l: ["-", 20], r: ["x", 2] }
+];
+const BOSS_Z = 2600, BOSS_N = 120, SPEED = 260;
+
+let px = 0, targetX = 0, crowd = 5, shown = 5, dist = 0, phase = "intro", phaseT = 0, time = 0, started = false;
+let rows = [], enemies = BOSS_N, fx = [], touched = false, dragging = false, battleT = 0, result = "";
+function reset() {
+  px = targetX = 0; crowd = shown = 5; dist = 0; phase = "intro"; phaseT = 0; enemies = BOSS_N; result = "";
+  rows = ROWS.map(r => ({ ...r, hit: false }));
+}
+
+function apply(op, n) {
+  const before = crowd;
+  if (op === "+") crowd += n; else if (op === "-") crowd = Math.max(0, crowd - n); else crowd *= n;
+  beep(crowd > before ? 700 : 200, 0.12, crowd > before ? "triangle" : "sawtooth");
+  for (let i = 0; i < 14; i++) fx.push({ x: 180 + px * 1.1, y: 520, vx: (Math.random() - .5) * 220, vy: -Math.random() * 260, t: 0, c: crowd > before ? "#5cf28a" : "#ff6b6b" });
+}
+
+// ---------- input: drag to steer ----------
+function toLogical(e) { return [(e.clientX - ox) / scale, (e.clientY - oy) / scale]; }
+cv.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  const [x, y] = toLogical(e);
+  if (!started) return;
+  if (phase === "end") { openStore(); return; }
+  if (x > 250 && y < 60) { openStore(); return; }
+  dragging = true; touched = true;
+  if (phase === "intro") { phase = "run"; phaseT = 0; }
+  targetX = Math.max(-ROAD + 30, Math.min(ROAD - 30, (x - 180) / 1.1));
+});
+cv.addEventListener("pointermove", e => {
+  if (!dragging || phase !== "run") return;
+  const [x] = toLogical(e);
+  targetX = Math.max(-ROAD + 30, Math.min(ROAD - 30, (x - 180) / 1.1));
+});
+addEventListener("pointerup", () => dragging = false);
+
+// ---------- update ----------
+function update(dt) {
+  phaseT += dt;
+  if (phase === "intro" && phaseT > 2.5) { phase = "run"; phaseT = 0; } // auto-start so the ad never stalls
+  if (phase === "run") {
+    if (!touched) targetX = Math.sin(time * 1.4) * 70; // demo steering until the first touch
+    px += (targetX - px) * Math.min(1, dt * 10);
+    dist += SPEED * dt;
+    for (const r of rows) if (!r.hit && dist >= r.z) {
+      r.hit = true; const [op, n] = px < 0 ? r.l : r.r; apply(op, n);
+      if (crowd === 0) { phase = "battle"; phaseT = 0; }
+    }
+    if (dist >= BOSS_Z - 120) { phase = "battle"; phaseT = 0; battleT = 0; }
+  } else if (phase === "battle") {
+    battleT += dt;
+    if (battleT > 0.06 && crowd > 0 && enemies > 0) {
+      battleT = 0; const k = Math.max(1, Math.round(Math.min(crowd, enemies) / 25));
+      crowd -= k; enemies -= k; beep(300 + Math.random() * 200, 0.03, "square", 0.02);
+    }
+    if (crowd <= 0 || enemies <= 0) { result = crowd > 0 ? "win" : "lose"; phase = "result"; phaseT = 0; beep(result === "win" ? 880 : 150, 0.3); }
+  } else if (phase === "result" && phaseT > 1.8) { phase = "end"; phaseT = 0; }
+  for (const f of fx) { f.t += dt; f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 700 * dt; }
+  fx = fx.filter(f => f.t < 0.8);
+  shown += (crowd - shown) * Math.min(1, dt * 12);
+}
+
+// ---------- draw ----------
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function text(s, x, y, size, col = "#fff", stroke = "#0e2233") {
+  ctx.font = `900 ${size}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.lineWidth = size / 5; ctx.strokeStyle = stroke; ctx.strokeText(s, x, y); ctx.fillStyle = col; ctx.fillText(s, x, y);
+}
+function drawWorld() {
+  const full = [-ox / scale, -oy / scale, innerWidth / scale, innerHeight / scale];
+  const sky = ctx.createLinearGradient(0, 0, 0, HORIZON); sky.addColorStop(0, "#5ec8ff"); sky.addColorStop(1, "#bfeaff");
+  ctx.fillStyle = sky; ctx.fillRect(full[0], full[1], full[2], HORIZON - full[1]);
+  ctx.fillStyle = "#4cc86b"; ctx.fillRect(full[0], HORIZON, full[2], full[3]);
+  // road
+  const a = proj(-ROAD, 3000), b = proj(ROAD, 3000), c = proj(ROAD, 0), d = proj(-ROAD, 0);
+  ctx.fillStyle = "#e9eef5"; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x + 60, 640); ctx.lineTo(d.x - 60, 640); ctx.fill();
+  // stripes
+  ctx.fillStyle = "#cdd6e2";
+  for (let z = -(dist % 80); z < 3000; z += 80) {
+    const p1 = proj(-ROAD, z), p2 = proj(ROAD, z), p3 = proj(ROAD, z + 40), p4 = proj(-ROAD, z + 40);
+    ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.lineTo(p3.x, p3.y); ctx.lineTo(p4.x, p4.y); ctx.fill();
+  }
+}
+function drawGates() {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i], z = r.z - dist; if (r.hit || z < -10 || z > 2400) continue;
+    for (const side of [-1, 1]) {
+      const [op, n] = side < 0 ? r.l : r.r, good = op !== "-";
+      const p0 = proj(side < 0 ? -ROAD : 4, z), p1 = proj(side < 0 ? -4 : ROAD, z), h = 120 * p0.k;
+      ctx.fillStyle = good ? "rgba(70,170,255,.55)" : "rgba(255,80,80,.55)";
+      ctx.fillRect(p0.x, p0.y - h, p1.x - p0.x, h);
+      ctx.fillStyle = good ? "#1e7fd6" : "#d63a3a";
+      ctx.fillRect(p0.x - 3 * p0.k, p0.y - h, 6 * p0.k, h); ctx.fillRect(p1.x - 3 * p0.k, p0.y - h, 6 * p0.k, h);
+      text((op === "x" ? "×" : op) + n, (p0.x + p1.x) / 2, p0.y - h / 2, Math.max(10, 46 * p0.k));
+    }
+  }
+}
+function drawMan(x, y, k, col) {
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y - 22 * k, 6 * k, 0, 7); ctx.fill();
+  roundRect(x - 6 * k, y - 16 * k, 12 * k, 16 * k, 4 * k); ctx.fill();
+}
+// stable pseudo-random layout of a crowd around a center
+function crowdPos(i) { const a = i * 2.399, r = Math.sqrt(i) * 9; return [Math.cos(a) * r, Math.sin(a) * r * 0.5]; }
+function drawBoss() {
+  const z = BOSS_Z - dist; if (z > 2400) return;
+  const p = proj(0, Math.max(0, z));
+  const n = Math.min(enemies, 160);
+  for (let i = n - 1; i >= 0; i--) { const [dx, dy] = crowdPos(i); drawMan(p.x + dx * p.k * 1.6, p.y + dy * p.k * 1.6 - 10 * p.k, p.k * 1.1, "#e8434b"); }
+  if (enemies > 0) { ctx.fillStyle = "#e8434b"; roundRect(p.x - 34, p.y - 90 * p.k - 50, 68, 30, 15); ctx.fill(); text(String(enemies), p.x, p.y - 90 * p.k - 35, 18); }
+}
+function drawCrowd() {
+  const n = Math.min(Math.round(shown), 160), cx = 180 + px * 1.1, cy = 560;
+  const bob = phase === "run" ? Math.sin(time * 18) * 2 : 0;
+  for (let i = n - 1; i >= 0; i--) { const [dx, dy] = crowdPos(i); drawMan(cx + dx, cy + dy + (i % 2 ? bob : -bob), 1, "#2f7cf6"); }
+  ctx.fillStyle = "#2f7cf6"; roundRect(cx - 30, cy - 80 - Math.sqrt(n) * 3, 60, 30, 15); ctx.fill();
+  text(String(Math.max(0, Math.round(shown))), cx, cy - 65 - Math.sqrt(n) * 3, 18);
+}
+function drawHud() {
+  ctx.fillStyle = "#3ec46d"; roundRect(250, 14, 98, 34, 17); ctx.fill(); text("INSTALL", 299, 32, 15, "#fff", "#1d7a40");
+  const pr = Math.min(1, dist / BOSS_Z);
+  ctx.fillStyle = "rgba(0,0,0,.25)"; roundRect(20, 22, 200, 14, 7); ctx.fill();
+  ctx.fillStyle = "#ffd23f"; roundRect(20, 22, 200 * pr, 14, 7); ctx.fill();
+  if (phase === "intro" || (phase === "run" && !touched && phaseT < 3)) {
+    const k = Math.sin(time * 4);
+    text("DRAG TO CHOOSE", 180, 400, 26);
+    ctx.font = "44px serif"; ctx.textAlign = "center"; ctx.fillText("👆", 180 + k * 70, 470);
+  }
+  for (const f of fx) { ctx.globalAlpha = 1 - f.t / 0.8; ctx.fillStyle = f.c; ctx.fillRect(f.x - 3, f.y - 3, 6, 6); }
+  ctx.globalAlpha = 1;
+  if (phase === "result") text(result === "win" ? "VICTORY!" : "SO CLOSE!", 180, 300, 46, result === "win" ? "#ffd23f" : "#ff6b6b");
+}
+function drawEnd() {
+  const a = Math.min(1, phaseT * 2);
+  ctx.fillStyle = `rgba(14,34,51,${0.93 * a})`; ctx.fillRect(-ox / scale, -oy / scale, innerWidth / scale, innerHeight / scale);
+  ctx.globalAlpha = a;
+  ctx.save(); ctx.translate(180, 200); ctx.rotate(Math.sin(time * 2) * 0.04);
+  const g = ctx.createLinearGradient(-70, -70, 70, 70); g.addColorStop(0, "#2f7cf6"); g.addColorStop(1, "#5cf2c8");
+  ctx.fillStyle = g; roundRect(-70, -70, 140, 140, 32); ctx.fill();
+  for (let i = 0; i < 9; i++) { const [dx, dy] = crowdPos(i); drawMan(dx * 2.2, 30 + dy * 2.2, 2.1, "#fff"); }
+  ctx.restore();
+  text("CROWD GATES", 180, 315, 34);
+  text(result === "win" ? "Can you beat level 2?" : "Pick smarter gates!", 180, 352, 18, "#cfe8ff", "#0e2233");
+  text("★★★★★", 180, 382, 20, "#ffd23f", "#0e2233");
+  const pulse = 1 + Math.sin(time * 6) * 0.05;
+  ctx.save(); ctx.translate(180, 460); ctx.scale(pulse, pulse);
+  ctx.fillStyle = "#3ec46d"; roundRect(-110, -32, 220, 64, 32); ctx.fill();
+  text("PLAY NOW", 0, 2, 26, "#fff", "#1d7a40"); ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+let last = 0;
+function frame(now) {
+  const dt = Math.min(0.033, (now - last) / 1000 || 0.016); last = now; time += dt;
+  update(dt);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+  drawWorld(); drawGates(); drawBoss(); drawCrowd(); drawHud();
+  if (phase === "end") drawEnd();
+  requestAnimationFrame(frame);
+}
+whenReady(() => { started = true; reset(); requestAnimationFrame(frame); });
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+# Playable ads — demos
+
+Two HTML5 playable ads in the most common mobile UA formats. **Live:** https://condrusarsen.github.io/playable-ads-demo/
+
+| Ad | Mechanic | Flow |
+|---|---|---|
+| [Tower Rescue](pin-rescue/index.html) | Pin-pull puzzle with particle fluids (gold, water, lava → stone) | tutorial → 3-pin puzzle → fail/retry → end card |
+| [Crowd Gates](crowd-gates/index.html) | Crowd runner with +, −, × gates and a boss army | auto-play until first touch → gates → battle → end card |
+
+## Tech
+- Single self-contained HTML per ad, about 15–20 KB, zero external requests.
+- MRAID 2.0 lifecycle (`ready` → `viewable`), CTA through `mraid.open()`, Google `ExitApi.exit()`, plain-web fallback.
+- Logical 360×640 canvas, letterboxed for any aspect ratio, portrait and landscape, devicePixelRatio-aware.
+- Tiny WebAudio sound, started only after a user gesture.
+
+## Network builds
+```bash
+node build.mjs
+```
+Writes `dist/<network>/<ad>.html` for AppLovin, Unity Ads, ironSource, Mintegral, Google Ads and plain web.
+
+Game names and store links are fictional; all code and art are original (drawn in code, no third-party assets).
+
+Made by Arseni Atrokhov with AI coding agents (Claude Code). Design, mechanics tuning and testing are mine.

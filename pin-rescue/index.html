@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="ad.orientation" content="portrait,landscape">
+<title>Tower Rescue — playable ad</title>
+<!--MRAID-->
+<style>
+  html,body{margin:0;height:100%;background:#120c1f;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+// ---------- ad network glue (MRAID 2.0 / Google ExitApi / plain web) ----------
+const STORE = {
+  android: "https://play.google.com/store/apps/details?id=com.example.towerrescue",
+  ios: "https://apps.apple.com/app/id0000000000"
+};
+function openStore() {
+  const url = /iPhone|iPad|iPod|Macintosh/i.test(navigator.userAgent) ? STORE.ios : STORE.android;
+  try { if (window.mraid && mraid.open) { mraid.open(url); return; } } catch (e) {}
+  if (window.ExitApi && ExitApi.exit) { ExitApi.exit(); return; }
+  window.open(url, "_blank");
+}
+function whenReady(start) {
+  const m = window.mraid;
+  if (!m) { start(); return; }
+  const go = () => { if (m.isViewable()) start(); else m.addEventListener("viewableChange", v => v && start()); };
+  if (m.getState() === "loading") m.addEventListener("ready", go); else go();
+}
+
+// ---------- canvas & scaling (logical 360x640, letterboxed) ----------
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+const W = 360, H = 640;
+let scale = 1, ox = 0, oy = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  ox = (innerWidth - W * scale) / 2; oy = (innerHeight - H * scale) / 2;
+}
+addEventListener("resize", resize); resize();
+
+// ---------- tiny sound ----------
+let ac = null;
+function beep(f, d = 0.08, type = "sine", v = 0.08) {
+  try {
+    ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = f; g.gain.value = v;
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d);
+    o.connect(g); g.connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
+  } catch (e) {}
+}
+
+// ---------- geometry helpers ----------
+function closest(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+  let t = ((px - ax) * dx + (py - ay) * dy) / l2; t = Math.max(0, Math.min(1, t));
+  return [ax + dx * t, ay + dy * t];
+}
+
+// ---------- level data ----------
+const R = 5;           // particle radius
+const HERO = { x: 180, y: 620, w: 46, h: 70 };
+function seg(ax, ay, bx, by) { return { ax, ay, bx, by }; }
+// Pin: rod from inner end (ax,ay) to handle (hx,hy); pulling slides it toward the handle side.
+function pin(ax, ay, hx, hy, id) { return { ax, ay, hx, hy, id, t: 0, pulled: false }; }
+
+const LEVELS = [
+  { // 1 — tutorial: one pin, gold falls to the hero
+    title: "Pull the pin!",
+    walls: [seg(40, 60, 40, 620), seg(320, 60, 320, 620), seg(40, 620, 320, 620),
+            seg(130, 170, 130, 330), seg(230, 170, 230, 330)],
+    pins: [pin(120, 330, 350, 330, "A")],
+    spawn: [{ type: "gold", x0: 138, x1: 222, y0: 230, y1: 322, n: 46 }],
+    hint: "A"
+  },
+  { // 2 — water cools lava, gold must not melt, lava must not touch the hero
+    title: "Save the knight!",
+    walls: [seg(40, 60, 40, 620), seg(320, 60, 320, 620), seg(40, 620, 320, 620),
+            seg(140, 90, 140, 210), seg(220, 90, 220, 210),
+            seg(40, 240, 140, 300), seg(320, 240, 220, 300),
+            seg(140, 300, 140, 470), seg(220, 300, 220, 470)],
+    pins: [pin(150, 212, 12, 212, "B"), pin(210, 212, 348, 212, "C"), pin(130, 472, 348, 472, "A")],
+    spawn: [{ type: "water", x0: 48, x1: 134, y0: 120, y1: 205, n: 70 },
+            { type: "gold", x0: 226, x1: 314, y0: 140, y1: 205, n: 44 },
+            { type: "lava", x0: 146, x1: 214, y0: 405, y1: 466, n: 42 }],
+    hint: "B"
+  }
+];
+
+// ---------- state ----------
+let level = 0, parts = [], pins = [], walls = [], phase = "intro", phaseT = 0, coins = 0, shown = 0;
+let fails = 0, interactions = 0, hero = "idle", banner = "", fx = [], totalT = 0, started = false, lastPull = 0;
+
+function loadLevel(i) {
+  level = i; const L = LEVELS[i];
+  walls = L.walls.map(s => ({ ...s }));
+  pins = L.pins.map(p => ({ ...p }));
+  parts = [];
+  for (const s of L.spawn) for (let k = 0; k < s.n; k++)
+    parts.push({ x: s.x0 + Math.random() * (s.x1 - s.x0), y: s.y0 + Math.random() * (s.y1 - s.y0),
+                 vx: 0, vy: 0, type: s.type, hot: 0 });
+  hero = "idle"; banner = L.title; phase = "play"; phaseT = 0; lastPull = 0;
+}
+
+function pinSeg(p) {
+  const dx = p.hx - p.ax, dy = p.hy - p.ay, len = Math.hypot(dx, dy);
+  const off = p.t * (len - 12);
+  const ux = dx / len, uy = dy / len;
+  return { ax: p.ax + ux * off, ay: p.ay + uy * off, bx: p.hx + ux * off, by: p.hy + uy * off };
+}
+
+// ---------- physics ----------
+const G = 1100, CELL = 12;
+function step(dt) {
+  const grid = new Map();
+  for (const p of parts) {
+    p.vy += G * dt; p.vx *= 0.995;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.hot > 0) p.hot -= dt;
+  }
+  // particle–particle
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i], k = ((p.x / CELL) | 0) + "," + ((p.y / CELL) | 0);
+    (grid.get(k) || grid.set(k, []).get(k)).push(i);
+  }
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i], cx = (p.x / CELL) | 0, cy = (p.y / CELL) | 0;
+    for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+      const cell = grid.get(gx + "," + gy); if (!cell) continue;
+      for (const j of cell) {
+        if (j <= i) continue;
+        const q = parts[j], dx = q.x - p.x, dy = q.y - p.y, d2 = dx * dx + dy * dy;
+        if (d2 >= 4 * R * R || d2 === 0) continue;
+        const d = Math.sqrt(d2), push = (2 * R - d) / 2, nx = dx / d, ny = dy / d;
+        p.x -= nx * push; p.y -= ny * push; q.x += nx * push; q.y += ny * push;
+        const rv = (q.vx - p.vx) * nx + (q.vy - p.vy) * ny;
+        if (rv < 0) { const im = rv * 0.5; p.vx += nx * im; p.vy += ny * im; q.vx -= nx * im; q.vy -= ny * im; }
+        react(p, q); react(q, p);
+      }
+    }
+  }
+  // particle–walls/pins
+  const solids = walls.concat(pins.filter(p => p.t < 1).map(pinSeg));
+  for (const p of parts) for (const s of solids) {
+    const [cx, cy] = closest(p.x, p.y, s.ax, s.ay, s.bx, s.by);
+    const dx = p.x - cx, dy = p.y - cy, d2 = dx * dx + dy * dy, rr = R + 3;
+    if (d2 < rr * rr) {
+      const d = Math.sqrt(d2) || 0.01, nx = dx / d, ny = dy / d;
+      p.x = cx + nx * rr; p.y = cy + ny * rr;
+      const vn = p.vx * nx + p.vy * ny;
+      if (vn < 0) { p.vx -= 1.3 * vn * nx; p.vy -= 1.3 * vn * ny; p.vx *= 0.96; }
+    }
+  }
+}
+// material reactions: water cools lava into stone (and the cooling spreads), lava melts gold
+function react(a, b) {
+  if (a.type === "water" && b.type === "lava") { a.type = "stone"; b.type = "stone"; a.hot = b.hot = 0.5; puff(b.x, b.y, "#cfd8e3"); beep(220 + Math.random() * 80, 0.05, "triangle", 0.03); }
+  else if (a.type === "stone" && a.hot > 0 && b.type === "lava") { b.type = "stone"; b.hot = 0.5; }
+  else if (a.type === "gold" && b.type === "lava") { a.dead = true; puff(a.x, a.y, "#ffb347"); }
+}
+function puff(x, y, c) { if (fx.length < 120) fx.push({ x, y, c, t: 0, vy: -40 - Math.random() * 40 }); }
+
+// ---------- rules ----------
+function rules(dt) {
+  const hx0 = HERO.x - HERO.w / 2, hx1 = HERO.x + HERO.w / 2, hy0 = HERO.y - HERO.h;
+  for (const p of parts) {
+    if (p.x > hx0 && p.x < hx1 && p.y > hy0 - 4) {
+      if (p.type === "lava" && hero !== "burnt") { hero = "burnt"; fail("Ouch! Lava first?"); }
+      if (p.type === "gold" && hero !== "burnt") { p.dead = true; coins += 10; puff(p.x, p.y, "#ffe066"); if (coins % 50 === 0) beep(880, 0.06, "square", 0.04); }
+    }
+  }
+  parts = parts.filter(p => !p.dead);
+  if (phase !== "play") return;
+  const goldLeft = parts.filter(p => p.type === "gold").length;
+  const melted = LEVELS[level].spawn.filter(s => s.type === "gold").reduce((a, s) => a + s.n, 0) * 10 - coins - goldLeft * 10;
+  if (level === 1 && melted > 120 && hero !== "burnt") { fail("The gold melted!"); return; }
+  const allPulled = pins.every(p => p.pulled);
+  if (allPulled && goldLeft === 0 && hero !== "burnt") { phase = "win"; phaseT = 0; hero = "happy"; beep(660, 0.1); setTimeout(() => beep(990, 0.15), 120); }
+  else if (allPulled && performance.now() - lastPull > 3500 && hero !== "burnt") { phase = "win"; phaseT = 0; hero = "happy"; }
+}
+function fail(msg) { if (phase !== "play") return; phase = "fail"; phaseT = 0; banner = msg; fails++; beep(140, 0.3, "sawtooth", 0.05); }
+
+// ---------- input ----------
+function toLogical(e) {
+  const t = e.changedTouches ? e.changedTouches[0] : e;
+  return [(t.clientX - ox) / scale, (t.clientY - oy) / scale];
+}
+function onDown(e) {
+  e.preventDefault();
+  const [x, y] = toLogical(e);
+  if (!started) return;
+  if (phase === "end") { openStore(); return; }
+  if (phase === "fail" && phaseT > 0.8) {
+    if (fails >= 2 || totalT > 35) toEnd(); else loadLevel(level);
+    return;
+  }
+  if (phase !== "play") return;
+  if (x > 250 && y < 60) { openStore(); return; } // top-right install chip
+  let best = null, bd = 26;
+  for (const p of pins) {
+    if (p.pulled) continue;
+    const s = pinSeg(p), [cx, cy] = closest(x, y, s.ax, s.ay, s.bx, s.by), d = Math.hypot(x - cx, y - cy);
+    if (d < bd) { bd = d; best = p; }
+  }
+  if (best) { best.pulled = true; interactions++; lastPull = performance.now(); beep(520, 0.06, "triangle"); }
+}
+cv.addEventListener("pointerdown", onDown);
+
+function toEnd() { phase = "end"; phaseT = 0; }
+
+// ---------- drawing ----------
+const COL = { gold: "#ffd23f", water: "#3fa9ff", lava: "#ff5a1f", stone: "#8a8f99" };
+function drawBg() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#2b1d4a"); g.addColorStop(1, "#120c1f");
+  ctx.fillStyle = g; ctx.fillRect(-ox / scale, -oy / scale, innerWidth / scale, innerHeight / scale);
+  // tower bricks
+  ctx.fillStyle = "#3a2b5c"; ctx.fillRect(40, 60, 280, 560);
+  ctx.strokeStyle = "rgba(0,0,0,.18)"; ctx.lineWidth = 1;
+  for (let y = 60; y < 620; y += 20) for (let x = 40 + ((y / 20) % 2) * 15; x < 320; x += 30) ctx.strokeRect(x, y, 30, 20);
+}
+function drawWalls() {
+  ctx.lineCap = "round"; ctx.strokeStyle = "#6f5aa6"; ctx.lineWidth = 8;
+  for (const s of walls) { ctx.beginPath(); ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); ctx.stroke(); }
+  ctx.strokeStyle = "#9c86d8"; ctx.lineWidth = 2;
+  for (const s of walls) { ctx.beginPath(); ctx.moveTo(s.ax, s.ay - 2); ctx.lineTo(s.bx, s.by - 2); ctx.stroke(); }
+}
+function drawPins() {
+  for (const p of pins) {
+    if (p.t >= 1) continue;
+    const s = pinSeg(p);
+    ctx.strokeStyle = "#d9dee8"; ctx.lineWidth = 7; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(s.ax, s.ay); ctx.lineTo(s.bx, s.by); ctx.stroke();
+    ctx.strokeStyle = "#f5f7fb"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(s.ax, s.ay - 2); ctx.lineTo(s.bx, s.by - 2); ctx.stroke();
+    ctx.fillStyle = "#ffcc33"; ctx.strokeStyle = "#a87b00"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(s.bx, s.by, 10, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#3a2b5c"; ctx.beginPath(); ctx.arc(s.bx, s.by, 4, 0, 7); ctx.fill();
+  }
+}
+function drawParts() {
+  for (const t of ["stone", "water", "lava", "gold"]) {
+    ctx.fillStyle = COL[t];
+    if (t === "lava") { ctx.shadowColor = "#ff7b00"; ctx.shadowBlur = 10; }
+    ctx.beginPath();
+    for (const p of parts) if (p.type === t) { ctx.moveTo(p.x + R + 1.5, p.y); ctx.arc(p.x, p.y, R + 1.5, 0, 7); }
+    ctx.fill(); ctx.shadowBlur = 0;
+    if (t === "gold") { ctx.fillStyle = "#fff6c2"; ctx.beginPath(); for (const p of parts) if (p.type === t) { ctx.moveTo(p.x, p.y); ctx.arc(p.x - 2, p.y - 2, 1.6, 0, 7); } ctx.fill(); }
+  }
+}
+function drawHero(t) {
+  const x = HERO.x, y = HERO.y, burnt = hero === "burnt", happy = hero === "happy";
+  const bob = happy ? Math.abs(Math.sin(t * 10)) * -10 : Math.sin(t * 3) * 1.5;
+  ctx.save(); ctx.translate(x, y + bob);
+  ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.ellipse(0, -bob, 24, 5, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = burnt ? "#333" : "#3b6fd8"; roundRect(-18, -42, 36, 38, 9); ctx.fill();          // body
+  ctx.fillStyle = burnt ? "#222" : "#ffd7b0"; ctx.beginPath(); ctx.arc(0, -52, 15, 0, 7); ctx.fill(); // head
+  ctx.fillStyle = burnt ? "#111" : "#c9ced8"; ctx.beginPath(); ctx.arc(0, -56, 16, Math.PI, 0); ctx.fill(); // helmet
+  ctx.fillStyle = "#e23d3d"; ctx.fillRect(-2, -78, 4, 10);
+  ctx.fillStyle = burnt ? "#fff" : "#1a1a1a";
+  if (happy) { ctx.lineWidth = 2.5; ctx.strokeStyle = "#1a1a1a"; ctx.beginPath(); ctx.arc(-6, -50, 3, Math.PI, 0); ctx.stroke(); ctx.beginPath(); ctx.arc(6, -50, 3, Math.PI, 0); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(-6, -50, 2.4, 0, 7); ctx.arc(6, -50, 2.4, 0, 7); ctx.fill(); }
+  if (burnt) for (let i = 0; i < 3; i++) puff(x - 10 + i * 10, y - 70, "#555");
+  ctx.restore();
+}
+function roundRect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function text(s, x, y, size, col = "#fff", stroke = "#2b1d4a") {
+  ctx.font = `900 ${size}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.lineWidth = size / 5; ctx.strokeStyle = stroke; ctx.strokeText(s, x, y); ctx.fillStyle = col; ctx.fillText(s, x, y);
+}
+function drawHud(t) {
+  ctx.fillStyle = "rgba(0,0,0,.35)"; roundRect(12, 14, 110, 34, 17); ctx.fill();
+  ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.arc(30, 31, 10, 0, 7); ctx.fill();
+  shown += (coins - shown) * 0.2; text(String(Math.round(shown)), 74, 32, 20);
+  ctx.fillStyle = "#3ec46d"; roundRect(250, 14, 98, 34, 17); ctx.fill(); text("INSTALL", 299, 32, 15, "#fff", "#1d7a40");
+  if (phase === "play" && banner) text(banner, 180, 82, 28);
+}
+// Hand hint on the next correct pin; on level 2 it waits until the player hesitates.
+const SOLUTION = [["A"], ["B", "C", "A"]];
+function drawHint(t) {
+  if (phase !== "play") return;
+  const id = SOLUTION[level].find(i => !pins.find(q => q.id === i).pulled);
+  if (!id) return;
+  const idle = (performance.now() - (lastPull || 0)) / 1000;
+  if (level === 1 && (phaseT < 2.5 || idle < 2.5)) return;
+  const p = pins.find(q => q.id === id);
+  const s = pinSeg(p), k = (Math.sin(t * 5) + 1) / 2, dir = Math.sign(p.hx - p.ax);
+  ctx.globalAlpha = 0.9; ctx.font = "40px serif"; ctx.textAlign = "center";
+  ctx.fillText("👆", s.bx - dir * (34 - k * 26), s.by + 34);
+  ctx.globalAlpha = 1;
+}
+function drawFx(dt) {
+  for (const f of fx) { f.t += dt; f.y += f.vy * dt; }
+  fx = fx.filter(f => f.t < 0.6);
+  for (const f of fx) { ctx.globalAlpha = 1 - f.t / 0.6; ctx.fillStyle = f.c; ctx.beginPath(); ctx.arc(f.x, f.y, 4 + f.t * 12, 0, 7); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+function drawOverlay(t) {
+  if (phase === "fail") {
+    ctx.fillStyle = `rgba(10,5,20,${Math.min(0.6, phaseT)})`; ctx.fillRect(-ox / scale, -oy / scale, innerWidth / scale, innerHeight / scale);
+    text(banner, 180, 260, 30, "#ff6b6b");
+    if (phaseT > 0.8) { ctx.fillStyle = "#ffcc33"; roundRect(100, 300, 160, 54, 27); ctx.fill(); text(fails >= 2 ? "CONTINUE" : "TRY AGAIN", 180, 328, 20, "#2b1d4a", "#ffcc33"); }
+  }
+  if (phase === "end") drawEnd(t);
+}
+function drawEnd(t) {
+  const a = Math.min(1, phaseT * 2);
+  ctx.fillStyle = `rgba(18,12,31,${0.92 * a})`; ctx.fillRect(-ox / scale, -oy / scale, innerWidth / scale, innerHeight / scale);
+  ctx.globalAlpha = a;
+  // icon
+  ctx.save(); ctx.translate(180, 200); ctx.rotate(Math.sin(t * 2) * 0.04);
+  const g = ctx.createLinearGradient(-70, -70, 70, 70); g.addColorStop(0, "#7b5cff"); g.addColorStop(1, "#ff5a8a");
+  ctx.fillStyle = g; roundRect(-70, -70, 140, 140, 32); ctx.fill();
+  ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.arc(0, 8, 34, 0, 7); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.fillRect(-46, -34, 92, 9); ctx.beginPath(); ctx.arc(46, -30, 10, 0, 7); ctx.fill();
+  ctx.restore();
+  text("TOWER RESCUE", 180, 315, 34);
+  text("200+ tricky pin puzzles", 180, 352, 17, "#d8ccff", "#120c1f");
+  text("★★★★★", 180, 382, 20, "#ffd23f", "#120c1f");
+  const pulse = 1 + Math.sin(t * 6) * 0.05;
+  ctx.save(); ctx.translate(180, 460); ctx.scale(pulse, pulse);
+  ctx.fillStyle = "#3ec46d"; roundRect(-110, -32, 220, 64, 32); ctx.fill();
+  text("PLAY NOW", 0, 2, 26, "#fff", "#1d7a40"); ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+// ---------- main loop ----------
+let last = 0, time = 0;
+function frame(now) {
+  const dt = Math.min(0.033, (now - last) / 1000 || 0.016); last = now; time += dt; totalT += dt; phaseT += dt;
+  for (const p of pins) if (p.pulled && p.t < 1) p.t = Math.min(1, p.t + dt * 2.6);
+  if (phase === "play" || phase === "fail" || phase === "win") for (let i = 0; i < 3; i++) step(dt / 3);
+  rules(dt);
+  if (phase === "win" && phaseT > 1.6) { if (level + 1 < LEVELS.length) loadLevel(level + 1); else toEnd(); }
+  if (phase === "play" && totalT > 45) toEnd();
+
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
+  drawBg(); drawParts(); drawWalls(); drawPins(); drawHero(time); drawFx(dt); drawHud(time); drawHint(time); drawOverlay(time);
+  if (phase === "win") text(level + 1 < LEVELS.length ? "GREAT!" : "AWESOME!", 180, 260, 44, "#ffd23f");
+  requestAnimationFrame(frame);
+}
+whenReady(() => { started = true; loadLevel(0); requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
